@@ -29,6 +29,7 @@ type Event struct {
 	ch        []Hook          // hooks from context
 	skipFrame int             // The number of additional frames to skip when printing the caller.
 	ctx       context.Context // Optional Go context for event
+	groups    int
 }
 
 func putEvent(e *Event) {
@@ -66,6 +67,7 @@ func newEvent(w LevelWriter, level Level) *Event {
 	e.level = level
 	e.stack = false
 	e.skipFrame = 0
+	e.groups = 0
 	return e
 }
 
@@ -139,6 +141,11 @@ func (e *Event) MsgFunc(createMsg func() string) {
 }
 
 func (e *Event) msg(msg string) {
+	// Close the opened groups
+	for e.groups > 0 {
+		e.buf = enc.AppendEndMarker(e.buf)
+		e.groups--
+	}
 	for _, hook := range e.ch {
 		hook.Run(e, e.level, msg)
 	}
@@ -155,6 +162,43 @@ func (e *Event) msg(msg string) {
 			fmt.Fprintf(os.Stderr, "zerolog: could not write event: %v\n", err)
 		}
 	}
+}
+
+// Group opens a named group to group the next fields in a dict.
+func (e *Event) Group(name string) *Event {
+	if e == nil {
+		return e
+	}
+	e.buf = enc.AppendBeginMarker(enc.AppendKey(e.buf, name))
+	e.groups++
+	return e
+}
+
+// Grouped updates the context with a dict set by the f function.
+func (e *Event) Grouped(name string, f func(*Event) *Event) *Event {
+	if e == nil {
+		return e
+	}
+	e.buf = enc.AppendBeginMarker(enc.AppendKey(e.buf, name))
+	e = f(e)
+	e.buf = enc.AppendEndMarker(e.buf)
+	return e
+}
+
+// Ungroup closes up to n opened groups.
+// If n < 0 then all opened groups are closed.
+func (e *Event) Ungroup(n int) *Event {
+	if e == nil {
+		return e
+	}
+	if n < 0 {
+		n = e.groups
+	}
+	for i := 0; i < n && e.groups > 0; i++ {
+		e.buf = enc.AppendEndMarker(e.buf)
+		e.groups--
+	}
+	return e
 }
 
 // Fields is a helper function to use a map or slice to set fields using type assertion.

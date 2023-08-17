@@ -1013,3 +1013,123 @@ func TestUnmarshalTextLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestContextWithGroup(t *testing.T) {
+	out := &bytes.Buffer{}
+	ctx := New(out).With().
+		Str("foo", "bar").
+		Group("group1").
+		Str("bar", "baz").
+		Group("group2").
+		Str("lorem", "ipsum").
+		Logger()
+	ctx.Log().Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"foo":"bar","group1":{"bar":"baz","group2":{"lorem":"ipsum"}},"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+	out.Reset()
+
+	ctx2 := ctx.With().
+		Ungroup(0).
+		Int("i", 12).
+		Logger()
+	ctx2.Log().Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"foo":"bar","group1":{"bar":"baz","group2":{"lorem":"ipsum","i":12}},"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+	out.Reset()
+
+	ctx2 = ctx.With().
+		Ungroup(1).
+		Int("i", 12).
+		Logger()
+	ctx2.Log().Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"foo":"bar","group1":{"bar":"baz","group2":{"lorem":"ipsum"},"i":12},"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+	out.Reset()
+
+	ctx2 = ctx.With().
+		Ungroup(-1).
+		Int("i", 12).
+		Logger()
+	ctx2.Log().Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"foo":"bar","group1":{"bar":"baz","group2":{"lorem":"ipsum"}},"i":12,"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+	out.Reset()
+
+	ctx = New(out).With().
+		Group("group1").
+		Grouped("group2", func(ctx Context) Context {
+			return ctx.Str("lorem", "ipsum").Group("group3").Int("i", 12)
+		}).
+		Logger()
+	ctx.Log().Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"group1":{"group2":{"lorem":"ipsum","group3":{"i":12}}},"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}
+
+func TestEventGrouping(t *testing.T) {
+	out := &bytes.Buffer{}
+	addFields := func(e *Event) *Event {
+		return e.Str("foo", "bar").
+			Group("group1").
+			Str("bar", "baz").
+			Group("group2").
+			Str("lorem", "ipsum")
+	}
+	ctx := New(out)
+	addFields(ctx.Log()).Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"foo":"bar","group1":{"bar":"baz","group2":{"lorem":"ipsum"}},"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+	out.Reset()
+
+	addFields(ctx.Log()).
+		Ungroup(0).
+		Int("i", 12).
+		Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"foo":"bar","group1":{"bar":"baz","group2":{"lorem":"ipsum","i":12}},"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+	out.Reset()
+
+	addFields(ctx.Log()).
+		Ungroup(1).
+		Int("i", 12).
+		Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"foo":"bar","group1":{"bar":"baz","group2":{"lorem":"ipsum"},"i":12},"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+	out.Reset()
+
+	addFields(ctx.Log()).
+		Ungroup(-1).
+		Int("i", 12).
+		Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"foo":"bar","group1":{"bar":"baz","group2":{"lorem":"ipsum"}},"i":12,"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+	out.Reset()
+
+	addFields(ctx.Log().Discard()).
+		Ungroup(-1).
+		Int("i", 12).
+		Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), ""; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+	out.Reset()
+
+	ctx.Log().
+		Group("group1").
+		Grouped("group2", func(e *Event) *Event {
+			return e.Str("lorem", "ipsum").Group("group3").Int("i", 12)
+		}).
+		Msg("hello")
+	if got, want := decodeIfBinaryToString(out.Bytes()), `{"group1":{"group2":{"lorem":"ipsum","group3":{"i":12}}},"message":"hello"}`+"\n"; got != want {
+		t.Errorf("invalid log output:\ngot:  %v\nwant: %v", got, want)
+	}
+}

@@ -235,6 +235,7 @@ type Logger struct {
 	hooks   []Hook
 	stack   bool
 	ctx     context.Context
+	groups  int
 }
 
 // New creates a root logger with given output writer. If the output writer implements
@@ -483,6 +484,7 @@ func (l *Logger) newEvent(level Level, done func(string)) *Event {
 	if l.stack {
 		e.Stack()
 	}
+	e.groups = l.groups
 	return e
 }
 
