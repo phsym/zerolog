@@ -1,6 +1,6 @@
 //go:build go1.21
 
-package zslog
+package zerolog
 
 import (
 	"context"
@@ -11,13 +11,11 @@ import (
 	"net"
 	"runtime"
 	"time"
-
-	"github.com/rs/zerolog"
 )
 
-// HandlerOptions are options for a ZerologHandler.
-// A zero HandlerOptions consists entirely of default values.
-type HandlerOptions struct {
+// SlogHandlerOptions are options for a SlogHandler.
+// A zero SlogHandlerOptions consists entirely of default values.
+type SlogHandlerOptions struct {
 	// AddSource causes the handler to compute the source code position
 	// of the log statement and add a SourceKey attribute to the output.
 	AddSource bool
@@ -30,14 +28,14 @@ type HandlerOptions struct {
 	Level slog.Leveler
 }
 
-// Handler is an slog.Handler implementation that uses zerolog to process slog.Record.
-type Handler struct {
-	opts   *HandlerOptions
-	logger zerolog.Logger
+// SlogHandler is an slog.Handler implementation that uses zerolog to process slog.Record.
+type SlogHandler struct {
+	opts   *SlogHandlerOptions
+	logger Logger
 }
 
-// NewHandler creates a *ZerologHandler implementing slog.Handler.
-// It wraps a zerolog.Logger to which log records will be sent.
+// NewSlogHandler creates a *ZerologHandler implementing slog.Handler.
+// It wraps a Logger to which log records will be sent.
 //
 // Unlesse opts.Level is not nil, the logger level is used to filter out records, otherwise
 // opts.Level is used.
@@ -49,20 +47,20 @@ type Handler struct {
 // # Caution:
 //
 // The provided logger must not be configured to write the timestamp or the caller as those fields are provided by slog records.
-func NewHandler(logger zerolog.Logger, opts *HandlerOptions) *Handler {
+func NewSlogHandler(logger Logger, opts *SlogHandlerOptions) *SlogHandler {
 	if opts == nil {
-		opts = new(HandlerOptions)
+		opts = new(SlogHandlerOptions)
 	}
 	logger.With().Timestamp()
 	opt := *opts // Copy
-	return &Handler{
+	return &SlogHandler{
 		opts:   &opt,
 		logger: logger,
 	}
 }
 
 // Enabled implements slog.Handler.
-func (h *Handler) Enabled(_ context.Context, lvl slog.Level) bool {
+func (h *SlogHandler) Enabled(_ context.Context, lvl slog.Level) bool {
 	if h.opts.Level != nil {
 		return lvl >= h.opts.Level.Level()
 	}
@@ -70,7 +68,7 @@ func (h *Handler) Enabled(_ context.Context, lvl slog.Level) bool {
 }
 
 // Handle implements slog.Handler.
-func (h *Handler) Handle(_ context.Context, rec slog.Record) error {
+func (h *SlogHandler) Handle(_ context.Context, rec slog.Record) error {
 	logger := h.logger
 	if h.opts.Level != nil {
 		logger = h.logger.Level(zerologLevel(h.opts.Level.Level()))
@@ -84,33 +82,33 @@ func (h *Handler) Handle(_ context.Context, rec slog.Record) error {
 
 	if h.opts.AddSource && rec.PC > 0 {
 		frame, _ := runtime.CallersFrames([]uintptr{rec.PC}).Next()
-		evt.Str(zerolog.CallerFieldName, fmt.Sprintf("%s:%d", frame.File, frame.Line))
+		evt.Str(CallerFieldName, fmt.Sprintf("%s:%d", frame.File, frame.Line))
 	}
-	evt = evt.Ungroup(-1)
-	evt.Time(zerolog.TimestampFieldName, rec.Time)
+	evt = evt.closeGroup(-1)
+	evt.Time(TimestampFieldName, rec.Time)
 	evt.Msg(rec.Message)
 	return nil
 }
 
 // WithAttrs implements slog.Handler.
-func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &Handler{
+func (h *SlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &SlogHandler{
 		opts:   h.opts,
 		logger: mapAttrs(h.logger.With(), attrs...).Logger(),
 	}
 }
 
 // WithGroup implements slog.Handler.
-func (h *Handler) WithGroup(name string) slog.Handler {
-	return &Handler{
+func (h *SlogHandler) WithGroup(name string) slog.Handler {
+	return &SlogHandler{
 		opts:   h.opts,
-		logger: h.logger.With().Group(name).Logger(),
+		logger: h.logger.With().openGroup(name).Logger(),
 	}
 }
 
 // zlogWriter is an interface with methods common between
-// zerolog.Context and *zerolog.Event. This interface is
-// implemented by both zerolog.Context and *zerolog.Event.
+// Context and *Event. This interface is
+// implemented by both Context and *Event.
 type zlogWriter[E any] interface {
 	Bool(string, bool) E
 	Dur(string, time.Duration) E
@@ -119,7 +117,7 @@ type zlogWriter[E any] interface {
 	Str(string, string) E
 	Time(string, time.Time) E
 	Uint64(string, uint64) E
-	// Dict(string, *zerolog.Event) E
+	// Dict(string, *Event) E
 	Interface(string, any) E
 	AnErr(string, error) E
 	Stringer(string, fmt.Stringer) E
@@ -127,16 +125,16 @@ type zlogWriter[E any] interface {
 	IPPrefix(string, net.IPNet) E
 	MACAddr(string, net.HardwareAddr) E
 	RawJSON(string, []byte) E
-	Grouped(string, func(E) E) E
+	grouped(string, func(E) E) E
 }
 
 var (
-	_ zlogWriter[*zerolog.Event]  = (*zerolog.Event)(nil)
-	_ zlogWriter[zerolog.Context] = zerolog.Context{}
+	_ zlogWriter[*Event]  = (*Event)(nil)
+	_ zlogWriter[Context] = Context{}
 )
 
-// mapAttrs writes multiple slog.Attr into the target which is either a zerolog.Context
-// or a *zerolog.Event.
+// mapAttrs writes multiple slog.Attr into the target which is either a Context
+// or a *Event.
 func mapAttrs[T zlogWriter[T]](target T, a ...slog.Attr) T {
 	for _, attr := range a {
 		target = mapAttr(target, attr)
@@ -144,14 +142,14 @@ func mapAttrs[T zlogWriter[T]](target T, a ...slog.Attr) T {
 	return target
 }
 
-// mapAttr writes slog.Attr into the target which is either a zerolog.Context
-// or a *zerolog.Event.
+// mapAttr writes slog.Attr into the target which is either a Context
+// or a *Event.
 func mapAttr[T zlogWriter[T]](target T, a slog.Attr) T {
 	value := a.Value.Resolve()
 	switch value.Kind() {
 	case slog.KindGroup:
-		// return target.Dict(a.Key, mapAttrs(zerolog.Dict(), value.Group()...))
-		return target.Grouped(a.Key, func(t T) T {
+		// return target.Dict(a.Key, mapAttrs(Dict(), value.Group()...))
+		return target.grouped(a.Key, func(t T) T {
 			return mapAttrs(t, value.Group()...)
 		})
 	case slog.KindBool:
@@ -204,18 +202,18 @@ func mapAttrAny[T zlogWriter[T]](target T, key string, value any) T {
 	}
 }
 
-// zerologLevel maps slog.Level into zerolog.Level.
-func zerologLevel(lvl slog.Level) zerolog.Level {
+// zerologLevel maps slog.Level into Level.
+func zerologLevel(lvl slog.Level) Level {
 	switch {
 	case lvl < slog.LevelDebug:
-		return zerolog.TraceLevel
+		return TraceLevel
 	case lvl < slog.LevelInfo:
-		return zerolog.DebugLevel
+		return DebugLevel
 	case lvl < slog.LevelWarn:
-		return zerolog.InfoLevel
+		return InfoLevel
 	case lvl < slog.LevelError:
-		return zerolog.WarnLevel
+		return WarnLevel
 	default:
-		return zerolog.ErrorLevel
+		return ErrorLevel
 	}
 }

@@ -164,8 +164,8 @@ func (e *Event) msg(msg string) {
 	}
 }
 
-// Group opens a named group to group the next fields in a dict.
-func (e *Event) Group(name string) *Event {
+// openGroup opens a named group to group the next fields in a dict.
+func (e *Event) openGroup(name string) *Event {
 	if e == nil {
 		return e
 	}
@@ -174,8 +174,8 @@ func (e *Event) Group(name string) *Event {
 	return e
 }
 
-// Grouped updates the context with a dict set by the f function.
-func (e *Event) Grouped(name string, f func(*Event) *Event) *Event {
+// grouped updates the context with a dict set by the f function.
+func (e *Event) grouped(name string, f func(*Event) *Event) *Event {
 	if e == nil {
 		return e
 	}
@@ -185,9 +185,9 @@ func (e *Event) Grouped(name string, f func(*Event) *Event) *Event {
 	return e
 }
 
-// Ungroup closes up to n opened groups.
+// closeGroup closes up to n opened groups.
 // If n < 0 then all opened groups are closed.
-func (e *Event) Ungroup(n int) *Event {
+func (e *Event) closeGroup(n int) *Event {
 	if e == nil {
 		return e
 	}

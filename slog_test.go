@@ -1,6 +1,6 @@
 //go:build go1.21 && !binary_log
 
-package zslog
+package zerolog
 
 import (
 	"bytes"
@@ -13,14 +13,13 @@ import (
 	"net"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"maps"
 
 	"testing/slogtest"
-
-	"github.com/rs/zerolog"
 )
 
 type stringer struct{}
@@ -95,29 +94,48 @@ var (
 	}
 
 	levels = []struct {
-		zlvl zerolog.Level
+		zlvl Level
 		slvl slog.Level
 	}{
-		{zerolog.TraceLevel, slog.LevelDebug - 1},
-		{zerolog.DebugLevel, slog.LevelDebug},
-		{zerolog.InfoLevel, slog.LevelInfo},
-		{zerolog.WarnLevel, slog.LevelWarn},
-		{zerolog.WarnLevel, slog.LevelWarn + 1},
-		{zerolog.WarnLevel, slog.LevelError - 1},
-		{zerolog.ErrorLevel, slog.LevelError},
-		{zerolog.ErrorLevel, slog.LevelError + 1},
+		{TraceLevel, slog.LevelDebug - 1},
+		{DebugLevel, slog.LevelDebug},
+		{InfoLevel, slog.LevelInfo},
+		{WarnLevel, slog.LevelWarn},
+		{WarnLevel, slog.LevelWarn + 1},
+		{WarnLevel, slog.LevelError - 1},
+		{ErrorLevel, slog.LevelError},
+		{ErrorLevel, slog.LevelError + 1},
 	}
 )
 
-func NewJSONHandler(out io.Writer, opts *HandlerOptions) *Handler {
-	return NewHandler(zerolog.New(out).Level(zerolog.InfoLevel), opts)
+func NewJSONHandler(out io.Writer, opts *SlogHandlerOptions) *SlogHandler {
+	return NewSlogHandler(New(out).Level(InfoLevel), opts)
+}
+
+func decode(b *bytes.Buffer) (map[string]any, error) {
+	m := make(map[string]any)
+	s := decodeIfBinaryToString(b.Bytes())
+	err := json.NewDecoder(strings.NewReader(s)).Decode(&m)
+	if err == nil {
+		b.Reset()
+	}
+	return m, err
+}
+
+func mustDecode(t *testing.T, b *bytes.Buffer) map[string]any {
+	t.Helper()
+	m, err := decode(b)
+	if err != nil {
+		t.Fatalf("Failed to json decode log output: %s", err.Error())
+	}
+	return m
 }
 
 func TestZerolog_Levels(t *testing.T) {
 	out := bytes.Buffer{}
 	for _, lvl := range levels {
 		t.Run(lvl.slvl.String(), func(t *testing.T) {
-			hdl := NewJSONHandler(&out, &HandlerOptions{Level: lvl.slvl})
+			hdl := NewJSONHandler(&out, &SlogHandlerOptions{Level: lvl.slvl})
 			for _, l := range levels {
 				enabled := l.slvl >= lvl.slvl
 				if hdl.Enabled(nil, l.slvl) != enabled {
@@ -125,16 +143,13 @@ func TestZerolog_Levels(t *testing.T) {
 				}
 				hdl.Handle(nil, slog.NewRecord(time.Now(), l.slvl, "foobar", 0))
 				if enabled {
-					m := map[string]any{}
-					if err := json.NewDecoder(&out).Decode(&m); err != nil {
-						t.Fatalf("Failed to json decode log output: %s", err.Error())
-					}
-					if m[zerolog.LevelFieldName] != l.zlvl.String() {
-						t.Fatalf("Unexpected value for field %s. Got %s but expected %s", zerolog.LevelFieldName, m[zerolog.LevelFieldName], l.zlvl.String())
+					m := mustDecode(t, &out)
+					if m[LevelFieldName] != l.zlvl.String() {
+						t.Fatalf("Unexpected value for field %s. Got %s but expected %s", LevelFieldName, m[LevelFieldName], l.zlvl.String())
 					}
 				}
+				out.Reset()
 			}
-
 		})
 	}
 }
@@ -143,27 +158,27 @@ func TestZerolog_Levels_NoOption(t *testing.T) {
 	out := bytes.Buffer{}
 	for _, lvl := range levels {
 		t.Run(lvl.slvl.String(), func(t *testing.T) {
-			hdl := NewHandler(zerolog.New(&out).Level(lvl.zlvl), nil)
+			hdl := NewSlogHandler(New(&out).Level(lvl.zlvl), nil)
 			for _, l := range levels {
 				enabled := l.zlvl >= lvl.zlvl
 				if hdl.Enabled(nil, l.slvl) != enabled {
 					t.Fatalf("Level %s enablement status unexpected", l.slvl)
 				}
 				hdl.Handle(nil, slog.NewRecord(time.Now(), l.slvl, "foobar", 0))
-				m := map[string]any{}
-				err := json.NewDecoder(&out).Decode(&m)
+				m, err := decode(&out)
 				if enabled {
 					if err != nil {
 						t.Fatalf("Failed to json decode log output: %s", err.Error())
 					}
-					if m[zerolog.LevelFieldName] != l.zlvl.String() {
-						t.Fatalf("Unexpected value for field %s. Got %s but expected %s", zerolog.LevelFieldName, m[zerolog.LevelFieldName], l.zlvl.String())
+					if m[LevelFieldName] != l.zlvl.String() {
+						t.Fatalf("Unexpected value for field %s. Got %s but expected %s", LevelFieldName, m[LevelFieldName], l.zlvl.String())
 					}
 				} else {
 					if !errors.Is(err, io.EOF) {
 						t.Fatalf("Expected io.EOF error but got %s", err)
 					}
 				}
+				out.Reset()
 			}
 
 		})
@@ -187,15 +202,12 @@ func TestZerolog_NoGroup(t *testing.T) {
 	hdl.Handle(nil, rec)
 
 	expected := maps.Clone(exp)
-	expected[zerolog.LevelFieldName] = zerolog.LevelErrorValue
-	expected[zerolog.MessageFieldName] = "foobar"
-	expected[zerolog.TimestampFieldName] = now.Format(time.RFC3339)
+	expected[LevelFieldName] = LevelErrorValue
+	expected[MessageFieldName] = "foobar"
+	expected[TimestampFieldName] = now.Format(time.RFC3339)
 	expected["attr"] = "the attr"
 
-	m := map[string]any{}
-	if err := json.NewDecoder(&out).Decode(&m); err != nil {
-		t.Fatalf("Failed to json decode log output: %s", err.Error())
-	}
+	m := mustDecode(t, &out)
 	if !reflect.DeepEqual(expected, m) {
 		t.Fatalf("Unexpected fields. Got %v, expected %v", m, expected)
 	}
@@ -221,20 +233,17 @@ func TestZerolog_Group(t *testing.T) {
 	hdl.Handle(nil, rec)
 
 	expected := map[string]any{
-		zerolog.LevelFieldName:     zerolog.LevelWarnValue,
-		zerolog.MessageFieldName:   "foobar",
-		zerolog.TimestampFieldName: now.Format(time.RFC3339),
-		"attr":                     "the attr",
+		LevelFieldName:     LevelWarnValue,
+		MessageFieldName:   "foobar",
+		TimestampFieldName: now.Format(time.RFC3339),
+		"attr":             "the attr",
 		"testgroup": map[string]any{
 			"attr":     "the attr",
 			"subgroup": maps.Clone(exp),
 		},
 	}
 
-	m := map[string]any{}
-	if err := json.NewDecoder(&out).Decode(&m); err != nil {
-		t.Fatalf("Failed to json decode log output: %s", err.Error())
-	}
+	m := mustDecode(t, &out)
 	if !reflect.DeepEqual(expected, m) {
 		t.Fatalf("Unexpected fields. \nGot %v,\n expected %v", m, expected)
 	}
@@ -242,15 +251,12 @@ func TestZerolog_Group(t *testing.T) {
 
 func TestZerolog_AddSource(t *testing.T) {
 	out := bytes.Buffer{}
-	hdl := NewJSONHandler(&out, &HandlerOptions{AddSource: true})
+	hdl := NewJSONHandler(&out, &SlogHandlerOptions{AddSource: true})
 	pc, file, line, _ := runtime.Caller(0)
 	hdl.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelInfo, "foobar", pc))
-	m := map[string]any{}
-	if err := json.NewDecoder(&out).Decode(&m); err != nil {
-		t.Fatalf("Failed to json decode log output: %s", err.Error())
-	}
-	if m[zerolog.CallerFieldName].(string) != fmt.Sprintf("%s:%d", file, line) {
-		t.Fatalf("Unexpected field %s: %s", zerolog.CallerFieldName, m[zerolog.CallerFieldName].(string))
+	m := mustDecode(t, &out)
+	if m[CallerFieldName].(string) != fmt.Sprintf("%s:%d", file, line) {
+		t.Fatalf("Unexpected field %s: %s", CallerFieldName, m[CallerFieldName].(string))
 	}
 }
 
@@ -259,7 +265,7 @@ func TestZerolog_AddSource(t *testing.T) {
 func TestHandler(t *testing.T) {
 	out := bytes.Buffer{}
 	dec := json.NewDecoder(&out)
-	hdl := NewJSONHandler(&out, &HandlerOptions{Level: slog.LevelDebug})
+	hdl := NewJSONHandler(&out, &SlogHandlerOptions{Level: slog.LevelDebug})
 	err := slogtest.TestHandler(hdl, func() []map[string]any {
 		results := []map[string]any{}
 		m := map[string]any{}

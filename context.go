@@ -19,24 +19,24 @@ func (c Context) Logger() Logger {
 	return c.l
 }
 
-// Group opens a named group to group the next fields in a dict.
-func (c Context) Group(name string) Context {
+// openGroup opens a named group to group the next fields in a dict.
+func (c Context) openGroup(name string) Context {
 	c.l.context = enc.AppendBeginMarker(enc.AppendKey(c.l.context, name))
 	c.l.groups++
 	return c
 }
 
-// Grouped updates the context with a dict set by the f function.
-func (c Context) Grouped(name string, f func(Context) Context) Context {
+// grouped updates the context with a dict set by the f function.
+func (c Context) grouped(name string, f func(Context) Context) Context {
 	c.l.context = enc.AppendBeginMarker(enc.AppendKey(c.l.context, name))
 	c = f(c)
 	c.l.context = enc.AppendEndMarker(c.l.context)
 	return c
 }
 
-// Ungroup closes up to n opened groups.
+// closeGroup closes up to n opened groups.
 // If n < 0 then all opened groups are closed.
-func (c Context) Ungroup(n int) Context {
+func (c Context) closeGroup(n int) Context {
 	if n < 0 {
 		n = c.l.groups
 	}

@@ -1,6 +1,6 @@
-//go:build go1.21 && !binary_log
+//go:build go1.21
 
-package zslog
+package zerolog
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"testing"
 	"time"
-
-	"github.com/rs/zerolog"
 )
 
 type DummyHandler struct{}
@@ -23,7 +21,7 @@ var (
 	handlers = map[string]slog.Handler{
 		"std-text": slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		"std-json": slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		"zerolog":  NewHandler(zerolog.New(io.Discard), &HandlerOptions{Level: slog.LevelDebug}),
+		"zerolog":  NewSlogHandler(New(io.Discard), &SlogHandlerOptions{Level: slog.LevelDebug}),
 		"dummy":    &DummyHandler{},
 	}
 
@@ -37,7 +35,7 @@ var (
 )
 
 func BenchmarkZerolog_Raw(b *testing.B) {
-	l := zerolog.New(io.Discard).Level(zerolog.DebugLevel).With().Timestamp().Logger()
+	l := New(io.Discard).Level(DebugLevel).With().Timestamp().Logger()
 	l = l.With().Str("foo", "bar").Logger()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
